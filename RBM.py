@@ -11,10 +11,9 @@ class RBM(nn.Module):
     This class defines all the functions needed for an RBN model
     activation function : sigmoid
     '''
-    def __init__(self,
-                visible_units=256,
+    def __init__(self,visible_units=256,\
                 hidden_units = 64,
-                k,
+                k=2,
                 learning_rate=1e-3,
                 momentum_coefficient=0.5,
                 weight_decay = 1e-4,
@@ -148,4 +147,3 @@ class RBM(nn.Module):
     def forward(self,input_data):
         'data->hidden->visible->hidden'
         return contrastive_divergence(input_data,True)
-    
