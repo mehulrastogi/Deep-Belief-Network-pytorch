@@ -11,7 +11,8 @@ class RBM(nn.Module):
     This class defines all the functions needed for an RBN model
     activation function : sigmoid
     '''
-    def __init__(self,visible_units=256,\
+
+    def __init__(self,visible_units=256,
                 hidden_units = 64,
                 k=2,
                 learning_rate=1e-3,
@@ -44,6 +45,7 @@ class RBM(nn.Module):
         self.b_momentum = torch.zeros(self.visible_units)
         self.c_momentum = torch.zeros(self.hidden_units)
 
+
     def activation(self,X):
         if self.activation=='sigmoid':
             return nn.sigmoid(X)
@@ -65,7 +67,7 @@ class RBM(nn.Module):
                     sample_h - Gibbs sampling of hidden (1 or 0) based
                                 on the value
         '''
-        hidden  = self.activation(torch.add(X.dot(self.W),self.c)) #W.x + b
+        hidden  = self.activation(torch.add(X.dot(self.W),self.c)) #W.x + c
         sample_h = self.sampling(hidden)
         return hidden,sample_h
 
@@ -98,7 +100,7 @@ class RBM(nn.Module):
         return contrastive_divergence(data, False)
 
 
-    def contrastive_divergence(self, input_data , training = True):
+    def contrastive_divergence(self, input_data ,training = True):
         # positive phase
         positive_hidden_probabilities,positive_hidden_act  = to_hidden(input_data)
 
@@ -139,11 +141,62 @@ class RBM(nn.Module):
 
             self.weights -= self.weights * self.weight_decay  # L2 weight decay
 
-        # Compute reconstruction error
+            # Compute reconstruction error
         error = torch.sum((input_data - negative_visible_probabilities)**2)
 
         return error
 
+
     def forward(self,input_data):
         'data->hidden->visible->hidden'
-        return contrastive_divergence(input_data,True)
+        return  to_hidden(input_data)
+    def backward(self,input_data):
+        '''
+            Includes the foward prop plus the gradient descent
+            Use this for training
+        '''
+        return contrastive_divergence(input_data , True);
+
+
+    def train(self,train_data , num_epochs,batch_size):
+
+        if(isinstance(train_data ,torch.utils.data.DataLoader)):
+            train_loader = train_data
+        else:
+            train_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size)
+
+
+        for epochs in range(num_epochs):
+            epoch_error = 0.0;
+
+            for batch,_ in train_loader:
+                batch = batch.view(len(batch) , self.visible_units)
+
+                if(use_gpu):
+                    batch = batch.cuda()
+                batch_err = self.backward(batch)
+
+                epoch_err += batch_err
+
+            print("Epoch Error (epoch:%d) : %.4f" % (epochs , epoch_err))
+        return
+
+    def extract_features(test_dataset):
+        if(isinstance(test_data ,torch.utils.data.DataLoader)):
+            test_loader = train_data
+        else:
+            test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=BATCH_SIZE)
+
+        test_features = np.zeros((len(test_dataset), HIDDEN_UNITS))
+        test_labels = np.zeros(len(test_dataset))
+
+        for i, (batch, labels) in enumerate(test_loader):
+            batch = batch.view(len(batch), VISIBLE_UNITS)  # flatten input data
+
+            if CUDA:
+                batch = batch.cuda()
+
+            test_features[i*BATCH_SIZE:i*BATCH_SIZE+len(batch)] = rbm.sample_hidden(batch).cpu().numpy()
+            test_labels[i*BATCH_SIZE:i*BATCH_SIZE+len(batch)] = labels.numpy()
+
+        return test_features,test_labels
