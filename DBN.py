@@ -2,37 +2,52 @@ import torch
 from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
-from .RBM import RBM
+from RBM import RBM
 
 
 
 
 class DBN(nn.Module):
     def __init__(self,
-                n_visible = 256,
-                n_hidden = [64 , 100],
-                use_cuda = True):
-        super(DBN,self).__init()
+                visible_units = 256,
+                hidden_units = [64 , 100],
+                k = 2,
+                learning_rate = 1e-5,
+                momentum_coefficient = 0.5,
+                weight_decay = 1e-4,
+                use_gpu = False,
+                _activation = 'sigmoid'):
+        super(DBN,self).__init__()
 
-        self.n_layers = len(n_hidden)
+        self.n_layers = len(hidden_units)
         self.rbm_layers =[]
         self.rbm_nodes = []
+
+        # Creating different RBM layers
         for i in range(self.n_layers ):
+            input_size = 0
             if i==0:
-                input_size = n_visible
+                input_size = visible_units
             else:
-                input_size = n_hidden[i-1]
-            rbm = RBM(n_visible = input_size, n_hidden = n_hidden[i],use_gpu=use_cuda)
+                input_size = hidden_units[i-1]
+            rbm = RBM(visible_units = input_size,
+                    hidden_units = hidden_units[i],
+                    k= k,
+                    learning_rate = learning_rate,
+                    momentum_coefficient = momentum_coefficient,
+                    weight_decay = weight_decay,
+                    use_gpu=use_gpu,
+                    _activation = _activation)
 
             self.rbm_layers.append(rbm)
 
         # rbm_layers = [RBM(rbn_nodes[i-1] , rbm_nodes[i],use_gpu=use_cuda) for i in range(1,len(rbm_nodes))]
-        self.W_rec = [nn.Parameter(self.rbm_layers[i].W.data.clone()) for i in range(self.n_layers-1)]
-        self.W_gen = [nn.Parameter(self.rbm_layers[i].W.data) for i in range(self.n_layers-1)]
+        self.W_rec = [nn.Parameter(self.rbm_layers[i].weight.data.clone()) for i in range(self.n_layers-1)]
+        self.W_gen = [nn.Parameter(self.rbm_layers[i].weight.data) for i in range(self.n_layers-1)]
         self.bias_rec = [nn.Parameter(self.rbm_layers[i].c.data.clone()) for i in range(self.n_layers-1)]
         self.bias_gen = [nn.Parameter(self.rbm_layers[i].b.data) for i in range(self.n_layers-1)]
-        self.W_mem = nn.Parameter(self.rbm_layers[-1].W.data)
-        self.v_bias_mem = nn.Parameter(self.rbm_layers[-1]b.data)
+        self.W_mem = nn.Parameter(self.rbm_layers[-1].weight.data)
+        self.v_bias_mem = nn.Parameter(self.rbm_layers[-1].b.data)
         self.h_bias_mem = nn.Parameter(self.rbm_layers[-1].c.data)
 
         for i in range(self.n_layers-1):
@@ -48,25 +63,34 @@ class DBN(nn.Module):
             do not confuse with training this just runs a foward pass
         '''
         v = input_data
-        for i in range(len(rbm_layers)):
+        for i in range(len(self.rbm_layers)):
+            v = v.view((v.shape[0] , -1)).type(torch.FloatTensor)#flatten
             p_v,v = self.rbm_layers[i].forward(v)
         return v
 
-    def train_static(self, train_data,num_epochs,batch_size):
+    def train_static(self, train_data,train_labels,num_epochs,batch_size):
         '''
         Greedy Layer By Layer training
         Keeping previous layers as static
         '''
 
-        v = train_data
+        tmp = train_data
 
-        for i in range(len(rbm_layers)):
+        for i in range(len(self.rbm_layers)):
             print("-"*20)
             print("Training the {} st rbm layer".format(i+1))
-            self.rbm_layers[i].train(v , num_epochs,batch_size)
+
+            tensor_x = tmp.type(torch.FloatTensor) # transform to torch tensors
+            tensor_y = train_labels.type(torch.FloatTensor)
+            _dataset = torch.utils.data.TensorDataset(tensor_x,tensor_y) # create your datset
+            _dataloader = torch.utils.data.DataLoader(_dataset) # create your dataloader
+
+            self.rbm_layers[i].train(_dataloader , num_epochs,batch_size)
+            # print(train_data.shape)
+            v = tmp.view((tmp.shape[0] , -1)).type(torch.FloatTensor)#flatten
             p_v , v = self.rbm_layers[i].forward(v)
-
-
+            tmp = v
+            # print(v.shape)
         return
 
     def train_ith(self, train_data,num_epochs,batch_size,ith_layer):

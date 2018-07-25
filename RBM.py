@@ -18,7 +18,7 @@ class RBM(nn.Module):
     def __init__(self,visible_units=256,
                 hidden_units = 64,
                 k=2,
-                learning_rate=1e-3,
+                learning_rate=1e-5,
                 momentum_coefficient=0.5,
                 weight_decay = 1e-4,
                 use_gpu = False,
@@ -152,7 +152,7 @@ class RBM(nn.Module):
 
             self.weight -= self.weight * self.weight_decay  # L2 weight decay
 
-            # Compute reconstruction error
+        # Compute reconstruction error
         error = torch.mean(torch.sum((input_data - negative_visible_probabilities)**2 , 1))
 
         return error
@@ -192,8 +192,8 @@ class RBM(nn.Module):
 
                 epoch_err += batch_err
 
-            avg_epoch_err = epoch_err / len(train_loader)
-            print("Average Epoch Error per iteration (epoch:%d) : %.4f" % (epochs , avg_epoch_err))
+
+            print("Epoch Error(epoch:%d) : %.4f" % (epochs , epoch_err))
         return
 
     # def extract_features(test_dataset):
