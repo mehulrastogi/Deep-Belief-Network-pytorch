@@ -5,7 +5,8 @@ from torch.autograd import Variable
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-
+from tqdm import tqdm
+import sys
 
 BATCH_SIZE = 64
 
@@ -15,14 +16,16 @@ class RBM(nn.Module):
     activation function : sigmoid
     '''
 
-    def __init__(self,visible_units=256,
+    def __init__(self,
+                visible_units=256,
                 hidden_units = 64,
                 k=2,
                 learning_rate=1e-5,
-                momentum_coefficient=0.5,
-                weight_decay = 1e-4,
-                use_gpu = False,
-                _activation='sigmoid'):
+                learning_rate_decay = False,
+                xavier_init = False,
+                increase_to_cd_k = False,
+                use_gpu = False
+                ):
         '''
         Defines the model
         W:Wheights shape (visible_units,hidden_units)
@@ -30,34 +33,27 @@ class RBM(nn.Module):
         b : visible unit bias shape(visisble_units ,)
         '''
         super(RBM,self).__init__()
+        self.desc = "RBM"
 
         self.visible_units = visible_units
         self.hidden_units = hidden_units
         self.k = k
         self.learning_rate = learning_rate
-        self.momentum_coefficient = momentum_coefficient
-        self.weight_decay = weight_decay
+        self.learning_rate_decay = learning_rate_decay
+        self.xavier_init = xavier_init
+        self.increase_to_cd_k = increase_to_cd_k
         self.use_gpu = use_gpu
-        self._activation = _activation
-
-        self.weight = torch.randn(self.visible_units,self.hidden_units) / math.sqrt(self.visible_units)#weights
-        self.c = torch.randn(self.hidden_units) / math.sqrt(self.hidden_units)#hidden layer bias
-        self.b = torch.randn(self.visible_units) / math.sqrt(self.visible_units)#visible layer bias
-
-        self.W_momentum = torch.zeros(self.visible_units,self.hidden_units)
-        self.b_momentum = torch.zeros(self.visible_units)
-        self.c_momentum = torch.zeros(self.hidden_units)
+        self.batch_size = 16
 
 
-    def activation(self,X):
-        if self._activation=='sigmoid':
-            return nn.functional.sigmoid(X)
-        elif self._activation=='tanh':
-            return nn.functional.tanh(X)
-        elif self._activation=='relu':
-            return nn.functional.relu(X)
+        # Initialization
+        if not self.xavier_init:
+            self.W = torch.randn(self.visible_units,self.hidden_units) * 0.01 #weights
         else:
-            raise ValueError("Invalid Activation Function")
+            self.xavier_value = torch.sqrt(torch.FloatTensor([1.0 / (self.visible_units + self.hidden_units)]))
+            self.W = -self.xavier_value + torch.rand(self.visible_units, self.hidden_units) * (2 * self.xavier_value)
+        self.h_bias = torch.zeros(self.hidden_units) #hidden layer bias
+        self.v_bias = torch.zeros(self.visible_units) #visible layer bias
 
 
     def to_hidden(self ,X):
@@ -70,13 +66,15 @@ class RBM(nn.Module):
                     sample_h - Gibbs sampling of hidden (1 or 0) based
                                 on the value
         '''
-        hidden = torch.matmul(X,self.weight)
-        hidden = torch.add(hidden, self.c)#W.x + c
-        hidden  = self.activation(hidden)
+        # print(X.shape , self.W.shape , self.h_bias.shape)
+        X_prob = torch.matmul(X,self.W)
+        # print(X_prob.shape)
+        X_prob = torch.add(X_prob, self.h_bias)#W.x + c
+        X_prob  = torch.sigmoid(X_prob)
 
-        sample_h = self.sampling(hidden)
+        sample_X_prob = self.sampling(X_prob)
 
-        return hidden,sample_h
+        return X_prob,sample_X_prob
 
     def to_visible(self,X):
         '''
@@ -88,13 +86,13 @@ class RBM(nn.Module):
 
         '''
         # computing hidden activations and then converting into probabilities
-        X_dash = torch.matmul(X ,self.weight.transpose( 0 , 1) )
-        X_dash = torch.add(X_dash , self.b)
-        X_dash = self.activation(X_dash)
+        X_prob = torch.matmul(X ,self.W.transpose( 0 , 1) )
+        X_prob = torch.add(X_prob , self.v_bias)
+        X_prob = torch.sigmoid(X_prob)
 
-        sample_X_dash = self.sampling(X_dash)
+        sample_X_prob = self.sampling(X_prob)
 
-        return X_dash,sample_X_dash
+        return X_prob,sample_X_prob
 
     def sampling(self,s):
         '''does sampling for the change in layer
@@ -110,8 +108,20 @@ class RBM(nn.Module):
         '''
         return self.contrastive_divergence(data, False)
 
+    def reconstruct(self , X,n_gibbs):
+        '''
+        This will reconstruct the sample with k steps of gibbs Sampling
 
-    def contrastive_divergence(self, input_data ,training = True):
+        '''
+        v = X
+        for i in range(n_gibbs):
+            prob_h_,_ = self.to_hidden(v)
+            prob_v_,v = self.to_visible(prob_h_)
+        return prob_v_,v
+
+
+    def contrastive_divergence(self, input_data ,training = True,
+                                n_gibbs_sampling_steps=1,lr = 0.001):
         # positive phase
         positive_hidden_probabilities,positive_hidden_act  = self.to_hidden(input_data)
 
@@ -122,11 +132,11 @@ class RBM(nn.Module):
 
         # negetive phase
         hidden_activations = positive_hidden_act
-        for i in range(self.k):
-            visible_p , _ = self.to_visible(hidden_activations)
-            hidden_probabilities,hidden_activations = self.to_hidden(visible_p)
+        for i in range(n_gibbs_sampling_steps):
+            visible_probabilities , _ = self.to_visible(hidden_activations)
+            hidden_probabilities,hidden_activations = self.to_hidden(visible_probabilities)
 
-        negative_visible_probabilities = visible_p
+        negative_visible_probabilities = visible_probabilities
         negative_hidden_probabilities = hidden_probabilities
 
         # calculating W via negative side
@@ -135,83 +145,91 @@ class RBM(nn.Module):
 
         # Update parameters
         if(training):
-            self.W_momentum *= self.momentum_coefficient
-            self.W_momentum += (positive_associations - negative_associations)
+            # self.W_momentum *= self.momentum_coefficient
+            # self.W_momentum += (positive_associations - negative_associations)
+            #
+            # self.b_momentum *= self.momentum_coefficient
+            # self.b_momentum += torch.sum(input_data - negative_visible_probabilities, dim=0)
+            #
+            # self.c_momentum *= self.momentum_coefficient
+            # self.c_momentum += torch.sum(positive_hidden_probabilities - negative_hidden_probabilities, dim=0)
+            #
+            batch_size = self.batch_size
+            #
+            # self.weight += self.W_momentum * self.learning_rate / batch_size
+            # self.b += self.b_momentum * self.learning_rate / batch_size
+            # self.c += self.c_momentum * self.learning_rate / batch_size
+            #
+            # self.weight -= self.weight * self.weight_decay  # L2 weight decay
 
-            self.b_momentum *= self.momentum_coefficient
-            self.b_momentum += torch.sum(input_data - negative_visible_probabilities, dim=0)
+            g = (positive_associations - negative_associations)
+            grad_update = g / batch_size
+            v_bias_update = torch.sum(input_data - negative_visible_probabilities,dim=0)/batch_size
+            h_bias_update = torch.sum(positive_hidden_probabilities - negative_hidden_probabilities,dim=0)/batch_size
 
-            self.c_momentum *= self.momentum_coefficient
-            self.c_momentum += torch.sum(positive_hidden_probabilities - negative_hidden_probabilities, dim=0)
+            self.W += lr * grad_update
+            self.v_bias += lr * v_bias_update
+            self.h_bias += lr * h_bias_update
 
-            batch_size = input_data.size(0)
-
-            self.weight += self.W_momentum * self.learning_rate / BATCH_SIZE
-            self.b += self.b_momentum * self.learning_rate / BATCH_SIZE
-            self.c += self.c_momentum * self.learning_rate / BATCH_SIZE
-
-            self.weight -= self.weight * self.weight_decay  # L2 weight decay
 
         # Compute reconstruction error
-        error = torch.mean(torch.sum((input_data - negative_visible_probabilities)**2 , 1))
+        error = torch.mean(torch.sum((input_data - negative_visible_probabilities)**2 , dim = 0))
 
-        return error
+        return error,torch.sum(torch.abs(grad_update))
 
 
     def forward(self,input_data):
         'data->hidden'
         return  self.to_hidden(input_data)
-    def step(self,input_data):
+    def step(self,input_data,epoch,num_epochs):
         '''
             Includes the foward prop plus the gradient descent
             Use this for training
         '''
-
-        return self.contrastive_divergence(input_data , True);
-
-
-    def train(self,train_data , num_epochs = 10,batch_size= 64):
-
-        BATCH_SIZE = batch_size
-
-        if(isinstance(train_data ,torch.utils.data.DataLoader)):
-            train_loader = train_data
+        if self.increase_to_cd_k:
+            n_gibbs_sampling_steps = int(math.ceil((epoch/num_epochs) * self.k))
         else:
-            train_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size)
+            n_gibbs_sampling_steps = self.k
+
+        if self.learning_rate_decay:
+            lr = self.learning_rate / epoch
+        else:
+            lr = self.learning_rate
+
+        return self.contrastive_divergence(input_data , True,n_gibbs_sampling_steps,lr);
 
 
-        for epochs in range(num_epochs):
-            epoch_err = 0.0;
+    def train(self,train_dataloader , num_epochs = 50,batch_size=16):
 
-            for batch,_ in train_loader:
+        self.batch_size = batch_size
+        if(isinstance(train_dataloader ,torch.utils.data.DataLoader)):
+            train_loader = train_dataloader
+        else:
+            train_loader = torch.utils.data.DataLoader(train_dataloader, batch_size=batch_size)
+
+
+        for epoch in range(1 , num_epochs+1):
+            epoch_err = 0.0
+            n_batches = int(len(train_loader))
+            # print(n_batches)
+
+            cost_ = torch.FloatTensor(n_batches , 1)
+            grad_ = torch.FloatTensor(n_batches , 1)
+
+            for i,(batch,_) in tqdm(enumerate(train_loader),ascii=True,
+                                desc="RBM fitting", file=sys.stdout):
+                # print(i)
                 batch = batch.view(len(batch) , self.visible_units)
 
                 if(self.use_gpu):
                     batch = batch.cuda()
-                batch_err = self.step(batch)
-
-                epoch_err += batch_err
+                cost_[i-1],grad_[i-1] = self.step(batch,epoch,num_epochs)
 
 
-            print("Epoch Error(epoch:%d) : %.4f" % (epochs , epoch_err))
+            print("Epoch:{} ,avg_cost = {} ,std_cost = {} ,avg_grad = {} ,std_grad = {}".format(epoch,\
+                                                            torch.mean(cost_),\
+                                                            torch.std(cost_),\
+                                                            torch.mean(grad_),\
+                                                            torch.std(grad_)))
+
         return
-
-    # def extract_features(test_dataset):
-    #     if(isinstance(test_data ,torch.utils.data.DataLoader)):
-    #         test_loader = train_data
-    #     else:
-    #         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=BATCH_SIZE)
-    #
-    #     test_features = np.zeros((len(test_dataset), self.hidden_units))
-    #     test_labels = np.zeros(len(test_dataset))
-    #
-    #     for i, (batch, labels) in enumerate(test_loader):
-    #         batch = batch.view(len(batch), self.visible_units)  # flatten input data
-    #
-    #         if self.use_gpu:
-    #             batch = batch.cuda()
-    #
-    #         test_features[i*BATCH_SIZE:i*BATCH_SIZE+len(batch)] = self.to_hidden(batch).cpu().numpy()
-    #         test_labels[i*BATCH_SIZE:i*BATCH_SIZE+len(batch)] = labels.numpy()
-    #
-    #     return test_features,test_labels
