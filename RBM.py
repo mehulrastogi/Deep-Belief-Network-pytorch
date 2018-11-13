@@ -12,8 +12,8 @@ BATCH_SIZE = 64
 
 class RBM(nn.Module):
     '''
-    This class defines all the functions needed for an RBN model
-    activation function : sigmoid
+    This class defines all the functions needed for an BinaryRBN model
+    where the visible and hidden units are both considered binary
     '''
 
     def __init__(self,
@@ -62,8 +62,8 @@ class RBM(nn.Module):
         also does sampling
         X here is the visible probabilities
         :param X: torch tensor shape = (n_samples , n_features)
-        :return -  hidden - new hidden layer (probabilities)
-                    sample_h - Gibbs sampling of hidden (1 or 0) based
+        :return -  X_prob - new hidden layer (probabilities)
+                    sample_X_prob - Gibbs sampling of hidden (1 or 0) based
                                 on the value
         '''
         # print(X.shape , self.W.shape , self.h_bias.shape)
@@ -81,8 +81,8 @@ class RBM(nn.Module):
         reconstructs data from hidden layer
         also does sampling
         X here is the probabilities in the hidden layer
-        :returns - X_dash - the new reconstructed layers(probabilities)
-                    sample_X_dash - sample of new layer(Gibbs Sampling)
+        :returns - X_prob - the new reconstructed layers(probabilities)
+                    sample_X_prob - sample of new layer(Gibbs Sampling)
 
         '''
         # computing hidden activations and then converting into probabilities
@@ -94,12 +94,12 @@ class RBM(nn.Module):
 
         return X_prob,sample_X_prob
 
-    def sampling(self,s):
-        '''does sampling for the change in layer
-        Sampling done by Gibbs Sampling using Bernoulli function
+    def sampling(self,prob):
         '''
-        s = torch.distributions.Bernoulli(s)
-        return s.sample()
+        Bernoulli sampling done based on probabilities s
+        '''
+        s = torch.distributions.Bernoulli(prob).sample()
+        return s
 
     def reconstruction_error(self , data):
         '''
@@ -115,7 +115,7 @@ class RBM(nn.Module):
         '''
         v = X
         for i in range(n_gibbs):
-            prob_h_,_ = self.to_hidden(v)
+            prob_h_,h = self.to_hidden(v)
             prob_v_,v = self.to_visible(prob_h_)
         return prob_v_,v
 
