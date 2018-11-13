@@ -1,4 +1,5 @@
 from RBM import RBM
+import torch
 
 class GaussianBernoulliRBM(RBM):
 

@@ -66,9 +66,7 @@ class RBM(nn.Module):
                     sample_X_prob - Gibbs sampling of hidden (1 or 0) based
                                 on the value
         '''
-        # print(X.shape , self.W.shape , self.h_bias.shape)
         X_prob = torch.matmul(X,self.W)
-        # print(X_prob.shape)
         X_prob = torch.add(X_prob, self.h_bias)#W.x + c
         X_prob  = torch.sigmoid(X_prob)
 
@@ -123,6 +121,7 @@ class RBM(nn.Module):
     def contrastive_divergence(self, input_data ,training = True,
                                 n_gibbs_sampling_steps=1,lr = 0.001):
         # positive phase
+
         positive_hidden_probabilities,positive_hidden_act  = self.to_hidden(input_data)
 
         # calculating W via positive side
@@ -145,22 +144,8 @@ class RBM(nn.Module):
 
         # Update parameters
         if(training):
-            # self.W_momentum *= self.momentum_coefficient
-            # self.W_momentum += (positive_associations - negative_associations)
-            #
-            # self.b_momentum *= self.momentum_coefficient
-            # self.b_momentum += torch.sum(input_data - negative_visible_probabilities, dim=0)
-            #
-            # self.c_momentum *= self.momentum_coefficient
-            # self.c_momentum += torch.sum(positive_hidden_probabilities - negative_hidden_probabilities, dim=0)
-            #
+
             batch_size = self.batch_size
-            #
-            # self.weight += self.W_momentum * self.learning_rate / batch_size
-            # self.b += self.b_momentum * self.learning_rate / batch_size
-            # self.c += self.c_momentum * self.learning_rate / batch_size
-            #
-            # self.weight -= self.weight * self.weight_decay  # L2 weight decay
 
             g = (positive_associations - negative_associations)
             grad_update = g / batch_size
@@ -218,9 +203,9 @@ class RBM(nn.Module):
 
             for i,(batch,_) in tqdm(enumerate(train_loader),ascii=True,
                                 desc="RBM fitting", file=sys.stdout):
-                # print(i)
-                batch = batch.view(len(batch) , self.visible_units)
 
+                batch = batch.view(len(batch) , self.visible_units)
+                
                 if(self.use_gpu):
                     batch = batch.cuda()
                 cost_[i-1],grad_[i-1] = self.step(batch,epoch,num_epochs)
